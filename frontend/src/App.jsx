@@ -3,8 +3,10 @@ import './App.css'
 import { runSingleFlight } from './singleFlight.js'
 import { formatDeadlineDay, formatDeadlineLabel } from './deadlineFormatting.js'
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
+const API_URL = import.meta.env.VITE_API_URL || (import.meta.env.DEV ? 'http://localhost:8000' : '')
+const BACKEND_UNAVAILABLE_MESSAGE = 'AI analysis requires the local backend and is not available to other visitors.'
 const API_IS_LOCAL = (() => {
+  if (!API_URL) return false
   try {
     return ['localhost', '127.0.0.1', '::1', '[::1]'].includes(new URL(API_URL).hostname)
   } catch {
@@ -27,7 +29,7 @@ function Icon({ name, size = 18 }) {
 }
 
 function ModelStatus({ health, inferenceStatus }) {
-  let label = 'Checking API'
+  let label = API_URL ? 'Checking API' : 'Local backend required'
   if (inferenceStatus === 'running') label = 'Analysis running'
   else if (inferenceStatus === 'succeeded') label = 'Last run responded'
   else if (inferenceStatus === 'failed') label = 'Last request failed'
@@ -117,7 +119,12 @@ function App() {
   const [error, setError] = useState('')
   const [dragging, setDragging] = useState(false)
   const [checked, setChecked] = useState({})
-  const [health, setHealth] = useState({ ready: false, checked: false, model: 'qwen3:4b' })
+  const [health, setHealth] = useState({
+    ready: false,
+    checked: !API_URL,
+    model: 'qwen3:4b',
+    detail: API_URL ? undefined : BACKEND_UNAVAILABLE_MESSAGE,
+  })
   const [inferenceStatus, setInferenceStatus] = useState('untested')
   const [elapsedSeconds, setElapsedSeconds] = useState(0)
 
@@ -130,6 +137,7 @@ function App() {
   }, [status])
 
   useEffect(() => {
+    if (!API_URL) return undefined
     const controller = new AbortController()
     fetch(`${API_URL}/api/health`, { signal: controller.signal })
       .then((response) => response.ok ? response.json() : Promise.reject(new Error('Health check failed')))
@@ -173,6 +181,10 @@ function App() {
   }
 
   const analyze = () => runSingleFlight(requestInFlight, async () => {
+    if (!API_URL) {
+      setError(BACKEND_UNAVAILABLE_MESSAGE)
+      return
+    }
     if (!file && !text.trim()) {
       setError('Add a PDF, TXT file, or pasted notice before analyzing.')
       return
@@ -248,9 +260,9 @@ function App() {
           <span>Notice<span className="brand-light">Lens</span></span>
         </a>
         <div className="topbar-right">
-          <span className="privacy-indicator" title={API_IS_LOCAL ? 'Notice text is sent to your loopback API and local Ollama instance.' : 'Notice text is sent to the API URL configured for this app.'}>
+          <span className="privacy-indicator" title={!API_URL ? BACKEND_UNAVAILABLE_MESSAGE : API_IS_LOCAL ? 'Notice text is sent to your loopback API and local Ollama instance.' : 'Notice text is sent to the API URL configured for this app.'}>
             <Icon name="shield" size={17}/>
-            <span>{API_IS_LOCAL ? 'Local processing' : 'Configured API'}</span>
+            <span>{!API_URL ? 'Analysis unavailable' : API_IS_LOCAL ? 'Local processing' : 'Configured API'}</span>
           </span>
           <ModelStatus health={health} inferenceStatus={inferenceStatus}/>
         </div>
@@ -263,7 +275,7 @@ function App() {
             <h1 id="page-title">Know what matters.</h1>
             <p className="hero-description">Turn university notices into clear actions, deadlines, and evidence-backed summaries.</p>
           </div>
-          <p className="hero-note"><Icon name="shield" size={18}/><span>{API_IS_LOCAL ? 'Your notice is processed on this device.' : 'Your notice is sent to the configured API.'}</span></p>
+          <p className="hero-note"><Icon name="shield" size={18}/><span>{!API_URL ? BACKEND_UNAVAILABLE_MESSAGE : API_IS_LOCAL ? 'Your notice is processed on this device.' : 'Your notice is sent to the configured API.'}</span></p>
         </section>
 
         <section className="input-workspace" aria-label="Add a notice">
@@ -301,8 +313,8 @@ function App() {
           </div>
 
           <div className="input-actions">
-            <p><Icon name="shield" size={16}/><span>{API_IS_LOCAL ? 'Processed locally with Ollama' : 'Sent to the configured API'}</span></p>
-            <button className="primary-button" type="button" onClick={analyze} disabled={status === 'loading'}>
+            <p><Icon name="shield" size={16}/><span>{!API_URL ? BACKEND_UNAVAILABLE_MESSAGE : API_IS_LOCAL ? 'Processed locally with Ollama' : 'Sent to the configured API'}</span></p>
+            <button className="primary-button" type="button" onClick={analyze} disabled={status === 'loading' || !API_URL}>
               {status === 'loading' ? <><span className="spinner"/> Analyzing notice</> : <>Analyze notice <Icon name="arrow" size={17}/></>}
             </button>
           </div>
@@ -384,7 +396,7 @@ function App() {
         )}
       </main>
 
-      <footer className="footer"><span>NoticeLens <span className="footer-separator">·</span> Read carefully. Act confidently.</span><span><Icon name="shield" size={15}/>{API_IS_LOCAL ? 'Local-first analysis' : 'Configured API processing'}</span></footer>
+      <footer className="footer"><span>NoticeLens <span className="footer-separator">·</span> Read carefully. Act confidently.</span><span><Icon name="shield" size={15}/>{!API_URL ? 'Local backend required for analysis' : API_IS_LOCAL ? 'Local-first analysis' : 'Configured API processing'}</span></footer>
     </div>
   )
 }

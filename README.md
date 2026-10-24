@@ -42,7 +42,7 @@ The API health route is `http://localhost:8000/api/health`. It reports API statu
 
 ```powershell
 cd .\frontend
-npm install
+npm ci
 npm run dev
 ```
 
@@ -53,6 +53,19 @@ VITE_API_URL=http://localhost:8000
 ```
 
 Restart Vite after changing environment configuration.
+
+## GitHub Pages deployment
+
+The frontend can be deployed to `https://anmolchaudhary617-ux.github.io/NoticeLens/`
+using the workflow in `.github/workflows/deploy.yml`. In the repository on GitHub,
+select **Settings → Pages → Build and deployment → Source → GitHub Actions**.
+Pushing to `main` runs the deployment automatically; the workflow can also be run
+manually from the **Actions** tab.
+
+Pages hosts only the static frontend. AI analysis requires the local FastAPI and
+Ollama services; the public build does not call a visitor's `localhost` and tells
+visitors that analysis is unavailable to them. No backend, tunnel, or secrets are
+included in the deployment.
 
 ## Architecture
 
