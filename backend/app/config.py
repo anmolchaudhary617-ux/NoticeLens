@@ -10,6 +10,10 @@ class Settings(BaseSettings):
     ollama_url: str = "http://localhost:11434"
     ollama_model: str = "qwen3:4b"
     ollama_timeout_seconds: float = 180.0
+    ollama_connect_timeout_seconds: float = 5.0
+    ollama_num_ctx: int = 4096
+    ollama_num_predict: int = 512
+    ollama_keep_alive: str = "5m"
     max_upload_mb: int = 10
     max_text_chars: int = 100_000
     cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173"

@@ -62,7 +62,9 @@ Restart Vite after changing environment configuration.
 - `backend/app/ollama_client.py`: local Ollama `/api/chat` calls, JSON validation, and exact evidence quote checks.
 - `backend/app/schemas.py`: response schema consumed by the frontend.
 
-`POST /api/analyze` accepts multipart form data with exactly one of `file` (PDF or TXT) or `text` (pasted notice content). It returns `title`, `summary`, `summary_evidence`, `audience`, `audience_evidence`, `deadlines`, `checklist`, `missing_information`, and `source_text`. Evidence is displayed only when its quote appears verbatim in extracted source text. A deadline without a verifiable quote is omitted; a normalized date is shown only when that exact ISO date appears in its source quote. Other date formats are left for the student to interpret.
+For compact notice extraction, requests disable Qwen's optional thinking output, cap generation at `OLLAMA_NUM_PREDICT`, set an explicit context size, and retain the loaded runner for `OLLAMA_KEEP_ALIVE`. The response timeout includes cold model loading as well as generation; the loopback connection timeout is configured separately.
+
+`POST /api/analyze` accepts multipart form data with exactly one of `file` (PDF or TXT) or `text` (pasted notice content). It returns `title`, `summary`, `summary_evidence`, `audience`, `audience_evidence`, `deadlines`, `checklist`, `missing_information`, and `source_text`. Evidence is displayed only when its quote appears verbatim in extracted source text. A deadline without a verifiable quote is omitted; a normalized date is shown only when the same complete date can be parsed unambiguously from that exact source quote.
 
 ## Configuration
 
@@ -72,7 +74,11 @@ Copy `.env.example` to `.env` at the repository root. Supported settings:
 |---|---|---|
 | `OLLAMA_URL` | `http://localhost:11434` | Local Ollama base URL |
 | `OLLAMA_MODEL` | `qwen3:4b` | Local model tag used for inference |
-| `OLLAMA_TIMEOUT_SECONDS` | `180` | Request timeout for generation |
+| `OLLAMA_TIMEOUT_SECONDS` | `180` | Maximum wait for Ollama's response (includes cold loading and generation) |
+| `OLLAMA_CONNECT_TIMEOUT_SECONDS` | `5` | Connection/pool timeout for the loopback request |
+| `OLLAMA_NUM_CTX` | `4096` | Context size; matched to the current local runner and notice workflow |
+| `OLLAMA_NUM_PREDICT` | `512` | Maximum generated tokens; enough for a compact analysis response |
+| `OLLAMA_KEEP_ALIVE` | `5m` | Keep a used model loaded briefly to avoid reloading between nearby notices |
 | `MAX_UPLOAD_MB` | `10` | Maximum PDF/TXT upload size |
 | `MAX_TEXT_CHARS` | `100000` | Maximum extracted or pasted text length |
 | `CORS_ORIGINS` | Vite localhost origins | Comma-separated browser origins allowed to call the API |
@@ -85,11 +91,12 @@ From the repository root:
 cd .\backend
 .\.venv\Scripts\python.exe -m pytest -q
 cd ..\frontend
+npm test
 npm run build
 npm run lint
 ```
 
-Backend tests mock the Ollama HTTP response; they verify request formation and response handling without invoking a model. To verify real local inference, start the API and submit a real notice from the UI or use the API directly. Model output can vary, so always review important dates and requirements against the source.
+Backend tests mock the Ollama HTTP response; they verify request formation and response handling without invoking a model. The frontend single-flight guard has Node tests (`npm test`). To verify real local inference, start the API and submit a real notice from the UI or use the API directly. Model output can vary, so always review important dates and requirements against the source.
 
 ## Limitations and troubleshooting
 
@@ -100,7 +107,7 @@ Backend tests mock the Ollama HTTP response; they verify request formation and r
 - **“Could not reach NoticeLens”**: start the API and check `http://localhost:8000/api/health`.
 - **Model not listed / model not found**: run `ollama pull qwen3:4b`, or set `OLLAMA_MODEL` to a model already in `ollama list`.
 - **CORS error**: add the frontend origin to `CORS_ORIGINS`, then restart the API.
-- **Slow analysis**: the first model load can take time; increase `OLLAMA_TIMEOUT_SECONDS` or use a shorter notice.
+- **Slow analysis**: the first model load can take longer than warm requests. NoticeLens disables Qwen's optional thinking output and caps the response to a compact token budget; use a shorter notice if the API reports its response timeout.
 
 ## License
 

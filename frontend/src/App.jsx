@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import './App.css'
+import { runSingleFlight } from './singleFlight.js'
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
 const API_IS_LOCAL = (() => {
@@ -29,18 +30,30 @@ function App() {
   const [dragging, setDragging] = useState(false)
   const [checked, setChecked] = useState({})
   const [health, setHealth] = useState({ ready: false, checked: false, model: 'qwen3:4b' })
+  const [inferenceStatus, setInferenceStatus] = useState('untested')
+  const [elapsedSeconds, setElapsedSeconds] = useState(0)
+  const requestInFlight = useRef(false)
+  const requestStartedAt = useRef(0)
+
+  useEffect(() => {
+    if (status !== 'loading') return undefined
+    const timer = window.setInterval(() => {
+      setElapsedSeconds(Math.floor((Date.now() - requestStartedAt.current) / 1000))
+    }, 1000)
+    return () => window.clearInterval(timer)
+  }, [status])
 
   useEffect(() => {
     const controller = new AbortController()
     fetch(`${API_URL}/api/health`, { signal: controller.signal })
       .then((response) => response.ok ? response.json() : Promise.reject(new Error('Health check failed')))
-      .then((data) => setHealth({ ready: !!data.model_available, checked: true, model: data.model || 'qwen3:4b', detail: data.detail || (data.model_available ? 'Ollama is reachable and this model is listed; a generation has not been tested yet.' : 'The configured Ollama model is unavailable.') }))
-      .catch((err) => { if (err.name !== 'AbortError') setHealth((old) => ({ ...old, ready: false, checked: true, detail: 'Local API or Ollama is unavailable.' })) })
+      .then((data) => setHealth({ ready: !!data.model_available, ollamaReachable: !!data.ollama_reachable, checked: true, model: data.model || 'qwen3:4b', detail: data.detail || (data.model_available ? 'Ollama is reachable and this model is listed. Generation is verified only after analysis.' : 'The configured Ollama model is unavailable.') }))
+      .catch((err) => { if (err.name !== 'AbortError') setHealth((old) => ({ ...old, ready: false, ollamaReachable: false, checked: true, detail: 'Local API or Ollama is unavailable.' })) })
     return () => controller.abort()
   }, [])
 
   const chooseFile = (nextFile) => {
-    if (!nextFile) return
+    if (!nextFile || requestInFlight.current) return
     const ext = nextFile.name.split('.').pop()?.toLowerCase()
     if (!['pdf', 'txt'].includes(ext)) {
       setError('Choose a PDF or TXT file to continue.')
@@ -53,13 +66,16 @@ function App() {
     setStatus('idle')
   }
 
-  const analyze = async () => {
+  const analyze = () => runSingleFlight(requestInFlight, async () => {
     if (!file && !text.trim()) {
       setError('Upload a notice or paste its text before analyzing.')
       return
     }
+    requestStartedAt.current = Date.now()
+    setElapsedSeconds(0)
     setError('')
     setStatus('loading')
+    setInferenceStatus('running')
     setAnalysis(null)
     try {
       const form = new FormData()
@@ -70,11 +86,13 @@ function App() {
       if (!response.ok) throw new Error(payload.detail || `Analysis failed (${response.status}).`)
       setAnalysis(payload)
       setStatus('ready')
+      setInferenceStatus('succeeded')
     } catch (err) {
       setError(err instanceof TypeError ? `Could not reach NoticeLens at ${API_URL}. Start the local API and try again.` : err.message)
       setStatus('error')
+      setInferenceStatus('failed')
     }
-  }
+  })
 
   const reset = () => {
     setFile(null); setText(''); setAnalysis(null); setError(''); setStatus('idle'); setChecked({})
@@ -99,7 +117,7 @@ function App() {
     <div className="app-shell">
       <header className="topbar">
         <a className="brand" href="#top" aria-label="NoticeLens home"><span className="brand-mark">N</span><span>Notice<span className="brand-light">Lens</span></span></a>
-        <div className="topbar-right"><span className="privacy"><Icon name="shield" size={15}/> {API_IS_LOCAL ? 'Processed locally by Ollama' : 'Sent to configured API'}</span><span className={`model-tag ${health.ready ? 'model-ready' : 'model-offline'}`} title={health.detail || (health.ready ? 'Ollama is reachable and the model is listed; generation has not been tested yet.' : 'Waiting for local API and model')}><i/> {health.model}{health.checked ? health.ready ? ' · Available' : ' · Unavailable' : ' · Checking'}</span></div>
+        <div className="topbar-right"><span className="privacy"><Icon name="shield" size={15}/> {API_IS_LOCAL ? 'Processed locally by Ollama' : 'Sent to configured API'}</span><span className={`model-tag ${health.ready && inferenceStatus !== 'failed' ? 'model-ready' : 'model-offline'}`} title={health.detail || 'The model-list check is not a generation test.'}><i/> {health.model}{inferenceStatus === 'running' ? ' · Generating' : inferenceStatus === 'succeeded' ? ' · Responded' : inferenceStatus === 'failed' ? ' · Request failed' : health.checked ? health.ready ? ' · Listed' : health.ollamaReachable ? ' · Not listed' : ' · Offline' : ' · Checking'}</span></div>
       </header>
 
       <main id="top" className="workspace">
@@ -111,17 +129,17 @@ function App() {
         <section className="intake" aria-label="Add a university notice">
           <div className="intake-label"><span className="step-number">01</span><div><h2>Start with a notice</h2><p>Drop in a circular or paste the text below.</p></div></div>
           <div className={`dropzone ${dragging ? 'is-dragging' : ''}`} onDragOver={(e) => { e.preventDefault(); setDragging(true) }} onDragLeave={() => setDragging(false)} onDrop={(e) => { e.preventDefault(); setDragging(false); chooseFile(e.dataTransfer.files[0]) }}>
-            <input ref={inputRef} type="file" accept=".pdf,.txt,application/pdf,text/plain" onChange={(e) => chooseFile(e.target.files[0])} aria-label="Choose PDF or TXT notice" />
+            <input ref={inputRef} type="file" accept=".pdf,.txt,application/pdf,text/plain" onChange={(e) => chooseFile(e.target.files[0])} aria-label="Choose PDF or TXT notice" disabled={status === 'loading'} />
             <span className="upload-icon"><Icon name="upload" size={20}/></span>
             <div className="drop-copy">{file ? <><strong>{file.name}</strong><span>{(file.size / 1024).toFixed(0)} KB · Ready to read</span></> : <><strong>Drop a PDF or TXT here</strong><span>or <button className="text-button" type="button" onClick={() => inputRef.current?.click()}>browse files</button></span></>}</div>
-            {file && <button className="icon-button" onClick={(e) => { e.stopPropagation(); reset() }} aria-label="Remove file"><Icon name="close" size={16}/></button>}
+            {file && <button className="icon-button" onClick={(e) => { e.stopPropagation(); reset() }} aria-label="Remove file" disabled={status === 'loading'}><Icon name="close" size={16}/></button>}
             <span className="file-kind">PDF / TXT</span>
           </div>
-          <div className="paste-row"><span className="or-label">OR PASTE TEXT</span><textarea value={text} onChange={(e) => { setText(e.target.value); setFile(null); setAnalysis(null) }} placeholder="Paste the full circular here…" rows="2" aria-label="Paste notice text"/><button className="analyze-button" type="button" onClick={analyze} disabled={status === 'loading'}>{status === 'loading' ? <><span className="spinner"/> Reading notice</> : <>Read this notice <Icon name="arrow" size={16}/></>}</button></div>
+          <div className="paste-row"><span className="or-label">OR PASTE TEXT</span><textarea value={text} onChange={(e) => { setText(e.target.value); setFile(null); setAnalysis(null) }} placeholder="Paste the full circular here…" rows="2" aria-label="Paste notice text" disabled={status === 'loading'}/><button className="analyze-button" type="button" onClick={analyze} disabled={status === 'loading'}>{status === 'loading' ? <><span className="spinner"/> Generating locally</> : <>Read this notice <Icon name="arrow" size={16}/></>}</button></div>
           {error && <p className="error-message" role="alert">{error}</p>}
         </section>
 
-        {status === 'loading' && <div className="loading-line" role="status"><span className="spinner"/> Looking for the purpose, dates, and actions in your notice…</div>}
+        {status === 'loading' && <div className="loading-line" role="status"><span className="spinner"/><div className="loading-copy"><span>{elapsedSeconds < 15 ? 'The local model is reading your notice…' : `Qwen is still generating (${elapsedSeconds}s).`}</span><small>First use can take longer while Ollama loads the model. The interface waits for a complete, verified response.</small></div></div>}
         {status === 'idle' && !analysis && <div className="empty-note"><span className="empty-rule"/><p>Your reading notes will appear here once you add a circular.</p><span className="empty-rule"/></div>}
 
         {analysis && <section className="results" aria-live="polite">
@@ -141,7 +159,7 @@ function App() {
           {source && <details className="source-panel"><summary><Icon name="file" size={16}/> View notice text</summary><pre>{source}</pre></details>}
         </section>}
       </main>
-      <footer className="footer"><span>NoticeLens <span className="footer-sep">/</span> Read carefully. Act confidently.</span><span><Icon name="shield" size={14}/> {API_IS_LOCAL ? 'Local model' : 'Configured API'} {health.checked ? health.ready ? 'available' : 'unavailable' : 'status checking'}</span></footer>
+      <footer className="footer"><span>NoticeLens <span className="footer-sep">/</span> Read carefully. Act confidently.</span><span><Icon name="shield" size={14}/> {API_IS_LOCAL ? 'Local inference' : 'Configured API'} {inferenceStatus === 'running' ? 'in progress' : inferenceStatus === 'succeeded' ? 'last run succeeded' : inferenceStatus === 'failed' ? 'last run failed' : health.checked ? health.ready ? 'model listed; not yet tested' : 'unavailable' : 'status checking'}</span></footer>
     </div>
   )
 }
