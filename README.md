@@ -60,11 +60,12 @@ Restart Vite after changing environment configuration.
 - `backend/app/main.py`: FastAPI health and analysis routes.
 - `backend/app/documents.py`: input validation and TXT/PDF text extraction using `pypdf`.
 - `backend/app/ollama_client.py`: local Ollama `/api/chat` calls, JSON validation, and exact evidence quote checks.
+- `backend/app/notice_facts.py`: deterministic date/context, explicit date ranges, and payment-requirement candidates used to recover model omissions and flag ambiguity.
 - `backend/app/schemas.py`: response schema consumed by the frontend.
 
 For compact notice extraction, requests disable Qwen's optional thinking output, cap generation at `OLLAMA_NUM_PREDICT`, set an explicit context size, and retain the loaded runner for `OLLAMA_KEEP_ALIVE`. The response timeout includes cold model loading as well as generation; the loopback connection timeout is configured separately.
 
-`POST /api/analyze` accepts multipart form data with exactly one of `file` (PDF or TXT) or `text` (pasted notice content). It returns `title`, `summary`, `summary_evidence`, `audience`, `audience_evidence`, `deadlines`, `checklist`, `missing_information`, and `source_text`. Evidence is displayed only when its quote appears verbatim in extracted source text. A deadline without a verifiable quote is omitted; a normalized date is shown only when the same complete date can be parsed unambiguously from that exact source quote.
+`POST /api/analyze` accepts multipart form data with exactly one of `file` (PDF or TXT) or `text` (pasted notice content). It returns `title`, `summary`, individually verified `summary_claims`, `summary_evidence`, `audience`, `audience_evidence`, `deadlines`, `checklist`, `missing_information`, and `source_text`. Quotes must match the extracted source (whitespace-only differences are normalized). Summary claims are accepted or rejected individually. Deterministic date candidates include nearby context and separate deadline, event, historical, and review-needed dates; normalized dates require a complete, valid source date. Payment amounts alone do not generate checklist actions; deterministic payment tasks require explicit action language such as “must bring” or “payable”.
 
 ## Configuration
 
@@ -77,7 +78,7 @@ Copy `.env.example` to `.env` at the repository root. Supported settings:
 | `OLLAMA_TIMEOUT_SECONDS` | `180` | Maximum wait for Ollama's response (includes cold loading and generation) |
 | `OLLAMA_CONNECT_TIMEOUT_SECONDS` | `5` | Connection/pool timeout for the loopback request |
 | `OLLAMA_NUM_CTX` | `4096` | Context size; matched to the current local runner and notice workflow |
-| `OLLAMA_NUM_PREDICT` | `512` | Maximum generated tokens; enough for a compact analysis response |
+| `OLLAMA_NUM_PREDICT` | `768` | Maximum generated tokens; bounded headroom for complete structured responses |
 | `OLLAMA_KEEP_ALIVE` | `5m` | Keep a used model loaded briefly to avoid reloading between nearby notices |
 | `MAX_UPLOAD_MB` | `10` | Maximum PDF/TXT upload size |
 | `MAX_TEXT_CHARS` | `100000` | Maximum extracted or pasted text length |
@@ -96,13 +97,13 @@ npm run build
 npm run lint
 ```
 
-Backend tests mock the Ollama HTTP response; they verify request formation and response handling without invoking a model. The frontend single-flight guard has Node tests (`npm test`). To verify real local inference, start the API and submit a real notice from the UI or use the API directly. Model output can vary, so always review important dates and requirements against the source.
+Backend tests use a generic synthetic fixture, a test-only Spirit volleyball transcription made from facts supplied by the user (not extracted from the original PDF), and mocked Ollama responses. They verify evidence filtering, compact JSON expansion, date separation, PDF text extraction, API errors, and request formation without invoking a model; mocked responses do not establish that Qwen will produce the same output during real inference. The original PDF is not included in the repository; test with the original notice in the app when verifying real local inference, and review important facts against the source.
 
 ## Limitations and troubleshooting
 
 - OCR is not supported. Scanned/image-only PDFs return an explicit message asking for a text-based PDF or pasted text.
 - Q&A is not included in this MVP.
-- The model may omit facts or produce unsupported interpretations. Evidence quotes are checked literally; a quote that does not match is removed and the associated fact is flagged, but model output still needs human review.
+- The model may omit facts or produce unsupported interpretations. Unsupported summary claims and checklist actions are rejected individually; deterministic date and payment cues are safeguards, not a substitute for full notice understanding. Model output still needs human review.
 - Health reports whether Ollama is reachable and the model tag is listed. It does not guarantee a successful generation; the first actual inference can still fail or time out.
 - **“Could not reach NoticeLens”**: start the API and check `http://localhost:8000/api/health`.
 - **Model not listed / model not found**: run `ollama pull qwen3:4b`, or set `OLLAMA_MODEL` to a model already in `ollama list`.
