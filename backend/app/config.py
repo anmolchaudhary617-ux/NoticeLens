@@ -12,7 +12,7 @@ class Settings(BaseSettings):
     ollama_timeout_seconds: float = 180.0
     ollama_connect_timeout_seconds: float = 5.0
     ollama_num_ctx: int = 4096
-    ollama_num_predict: int = 512
+    ollama_num_predict: int = 768
     ollama_keep_alive: str = "5m"
     max_upload_mb: int = 10
     max_text_chars: int = 100_000
